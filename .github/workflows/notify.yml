@@ -1,0 +1,26 @@
+name: Send reminder emails
+
+on:
+  schedule:
+    # Hourly. Event notifications (score reported, game cancelled, etc.) go out
+    # on the next run; daily reminders are throttled inside the script.
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/notify.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_FROM_NAME: League Central
+          APP_URL: ${{ vars.APP_URL }}

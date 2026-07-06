@@ -1,0 +1,118 @@
+rules_version = '2';
+
+// Roles:
+//  - league_admin: everything
+//  - city_admin: fields/permits/teams/contacts for their own city
+//  - coach: report results + reschedule games their team plays (authorized via
+//    coachIndex/{email}, which mirrors the contacts a city admin enters)
+//  - everyone (no login): read schedules, standings data, teams, fields
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email != null;
+    }
+    function userEmail() {
+      return request.auth.token.email.lower();
+    }
+    function roleData() {
+      return get(/databases/$(database)/documents/roles/$(userEmail())).data;
+    }
+    function hasRoleDoc() {
+      return signedIn() && exists(/databases/$(database)/documents/roles/$(userEmail()));
+    }
+    function isLeagueAdmin() {
+      return hasRoleDoc() && roleData().role == 'league_admin';
+    }
+    function isAnyCityAdmin() {
+      return hasRoleDoc() && roleData().role == 'city_admin';
+    }
+    function isCityAdminOf(cityId) {
+      return isAnyCityAdmin() && roleData().cityId == cityId;
+    }
+    function coachTeamIds() {
+      return get(/databases/$(database)/documents/coachIndex/$(userEmail())).data.teamIds;
+    }
+    function isCoachOfGame(gameData) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/coachIndex/$(userEmail()))
+        && (gameData.homeTeamId in coachTeamIds() || gameData.awayTeamId in coachTeamIds());
+    }
+
+    match /seasons/{id} {
+      allow read: if true;
+      allow write: if isLeagueAdmin();
+    }
+    match /divisions/{id} {
+      allow read: if true;
+      allow write: if isLeagueAdmin();
+    }
+    match /cities/{id} {
+      allow read: if true;
+      allow write: if isLeagueAdmin();
+    }
+
+    match /roles/{email} {
+      // Users read their own role on login; league admins manage all of them.
+      allow read: if isLeagueAdmin() || (signedIn() && userEmail() == email);
+      allow write: if isLeagueAdmin();
+    }
+
+    match /fields/{id} {
+      allow read: if true;
+      allow create: if isLeagueAdmin() || isCityAdminOf(request.resource.data.cityId);
+      allow update, delete: if isLeagueAdmin() || isCityAdminOf(resource.data.cityId);
+    }
+
+    match /permitSlots/{id} {
+      allow read: if true;
+      allow create: if isLeagueAdmin() || isCityAdminOf(request.resource.data.cityId);
+      allow delete: if isLeagueAdmin() || isCityAdminOf(resource.data.cityId);
+      // Coaches may only stamp/free the gameId when rescheduling a game.
+      allow update: if isLeagueAdmin()
+        || isCityAdminOf(resource.data.cityId)
+        || (signedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['gameId']));
+    }
+
+    match /teams/{id} {
+      allow read: if true;
+      allow create: if isLeagueAdmin() || isCityAdminOf(request.resource.data.cityId);
+      allow update, delete: if isLeagueAdmin() || isCityAdminOf(resource.data.cityId);
+    }
+
+    match /contacts/{id} {
+      // Coach names/emails/phones stay behind a login.
+      allow read: if signedIn();
+      allow create: if isLeagueAdmin() || isCityAdminOf(request.resource.data.cityId);
+      allow update, delete: if isLeagueAdmin() || isCityAdminOf(resource.data.cityId);
+    }
+
+    match /coachIndex/{email} {
+      allow read: if signedIn();
+      // Kept in sync with contacts by city admins' app writes.
+      allow write: if isLeagueAdmin() || isAnyCityAdmin();
+    }
+
+    match /games/{id} {
+      allow read: if true;
+      // Only the league admin can add games to or remove games from the schedule.
+      allow create, delete: if isLeagueAdmin();
+      // Coaches of either team can report results and reschedule — but can't
+      // change which teams play or delete the game.
+      allow update: if isLeagueAdmin()
+        || (isCoachOfGame(resource.data)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'homeScore', 'awayScore', 'forfeitingTeamId', 'suspended',
+              'needsReschedule', 'umpAssignerNotified', 'reportedBy', 'history',
+              'date', 'time', 'fieldId'
+            ]));
+    }
+
+    match /mailQueue/{id} {
+      // Any signed-in user's actions can queue a notification; only the league
+      // admin (and the server-side cron, which bypasses rules) can read them.
+      allow create: if signedIn();
+      allow read, update, delete: if isLeagueAdmin();
+    }
+  }
+}
