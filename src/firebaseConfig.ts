@@ -13,4 +13,4 @@ export const firebaseConfig = {
 };
 
 export const isConfigured =
-  firebaseConfig.apiKey !== 'AIzaSyDcg2pPlSGKRCpTSR9IJgwwF-pTtZnC1ds' || import.meta.env.VITE_USE_EMULATORS === 'true';
+  firebaseConfig.apiKey !== 'PASTE_ME' || import.meta.env.VITE_USE_EMULATORS === 'true';
